@@ -1,7 +1,15 @@
+import json
+from pathlib import Path
+
+import pandas as pd
 import streamlit as st
 import yfinance as yf
-import pandas as pd
 import plotly.graph_objects as go
+
+
+# ---------------------------------------------------------
+# PAGE CONFIG
+# ---------------------------------------------------------
 
 st.set_page_config(
     page_title="Stock EMA Analyzer",
@@ -9,332 +17,320 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📈 Stock EMA Analyzer")
-st.caption("Yahoo Finance data via yfinance | For informational use only")
 
-# -------------------------
-# Sidebar
-# -------------------------
+# ---------------------------------------------------------
+# LOAD WATCHLIST
+# ---------------------------------------------------------
 
-st.sidebar.header("Stock Settings")
+WATCHLIST_FILE = Path("watchlist.json")
 
-ticker = st.sidebar.text_input(
-    "Stock ticker",
-    value="RELIANCE.NS"
-).strip().upper()
 
-period = st.sidebar.selectbox(
-    "Period",
-    ["1 Month", "3 Months", "6 Months", "1 Year", "2 Years", "5 Years"],
-    index=3
-)
+def load_watchlist():
+    if not WATCHLIST_FILE.exists():
+        st.error("watchlist.json was not found.")
+        st.stop()
 
-period_map = {
-    "1 Month": "1mo",
-    "3 Months": "3mo",
-    "6 Months": "6mo",
-    "1 Year": "1y",
-    "2 Years": "2y",
-    "5 Years": "5y"
-}
+    with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-interval = st.sidebar.selectbox(
-    "Interval",
-    ["1 Day", "1 Hour", "30 Minutes", "15 Minutes"],
-    index=0
-)
 
-interval_map = {
-    "1 Day": "1d",
-    "1 Hour": "1h",
-    "30 Minutes": "30m",
-    "15 Minutes": "15m"
-}
+watchlist = load_watchlist()
 
-st.sidebar.subheader("EMA")
+stocks = watchlist.get("stocks", [])
+settings = watchlist.get("settings", {})
 
-ema_periods = st.sidebar.multiselect(
-    "Select EMA periods",
-    [5, 9, 10, 20, 21, 50, 100, 200],
-    default=[20, 50, 200]
-)
+EMA_PERIODS = settings.get("ema_periods", [100, 200])
 
-show_volume = st.sidebar.checkbox(
-    "Show volume",
-    value=True
-)
 
-show_candles = st.sidebar.checkbox(
-    "Candlestick chart",
-    value=True
-)
+# ---------------------------------------------------------
+# HELPER FUNCTIONS
+# ---------------------------------------------------------
 
-get_data_button = st.sidebar.button(
-    "🔄 Get Latest Data",
-    type="primary",
-    use_container_width=True
-)
+def calculate_ema(data, period):
+    return data["Close"].ewm(
+        span=period,
+        adjust=False
+    ).mean()
 
-# -------------------------
-# Validation
-# -------------------------
-
-if not ticker:
-    st.warning("Please enter a stock ticker.")
-    st.stop()
-
-if not ema_periods:
-    st.warning("Select at least one EMA.")
-    st.stop()
-
-# -------------------------
-# Download data
-# -------------------------
 
 @st.cache_data(ttl=300)
-def download_data(ticker, period, interval):
+def get_stock_data(ticker, period="2y"):
+    """
+    Download historical stock data from Yahoo Finance.
+    Cached for 5 minutes to avoid unnecessary repeated downloads.
+    """
 
     data = yf.download(
         ticker,
         period=period,
-        interval=interval,
+        interval="1d",
         auto_adjust=False,
         progress=False
     )
 
+    if data.empty:
+        return None
+
+    # yfinance can sometimes return MultiIndex columns
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = data.columns.get_level_values(0)
+
+    data = data.dropna(subset=["Close"])
 
     return data
 
 
-with st.spinner(f"Fetching {ticker} data..."):
+def get_latest_metrics(ticker):
+    """
+    Get latest price and EMA values for the comparison table.
+    """
 
-    data = download_data(
-        ticker,
-        period_map[period],
-        interval_map[interval]
-    )
+    data = get_stock_data(ticker, "2y")
 
-# -------------------------
-# Check data
-# -------------------------
+    if data is None or data.empty:
+        return None
 
-if data.empty:
+    latest_price = float(data["Close"].iloc[-1])
 
-    st.error(
-        f"No data found for {ticker}. "
-        "Check the ticker symbol and try again."
-    )
+    result = {
+        "Price": latest_price
+    }
 
+    for period in EMA_PERIODS:
+        ema = calculate_ema(data, period)
+        latest_ema = float(ema.iloc[-1])
+
+        distance = (
+            (latest_price - latest_ema)
+            / latest_ema
+        ) * 100
+
+        result[f"EMA {period}"] = latest_ema
+        result[f"Distance from EMA {period}"] = distance
+
+    return result
+
+
+# ---------------------------------------------------------
+# HEADER
+# ---------------------------------------------------------
+
+st.title("📈 Stock EMA Analyzer")
+
+st.write(
+    "Select one or more stocks to view their current EMA metrics "
+    "and historical price charts."
+)
+
+
+# ---------------------------------------------------------
+# STOCK SELECTION
+# ---------------------------------------------------------
+
+stock_names = [stock["name"] for stock in stocks]
+
+stock_lookup = {
+    stock["name"]: stock["ticker"]
+    for stock in stocks
+}
+
+
+selected_stocks = st.multiselect(
+    "Select stocks",
+    options=stock_names,
+    default=stock_names[:3],
+    help="Select one or more stocks from your watchlist."
+)
+
+
+if not selected_stocks:
+    st.info("Select at least one stock to continue.")
     st.stop()
 
-# -------------------------
-# Calculate EMA
-# -------------------------
 
-for ema in ema_periods:
+selected_tickers = [
+    stock_lookup[name]
+    for name in selected_stocks
+]
 
-    data[f"EMA {ema}"] = (
-        data["Close"]
-        .ewm(
-            span=ema,
-            adjust=False
-        )
-        .mean()
+
+# ---------------------------------------------------------
+# REFRESH
+# ---------------------------------------------------------
+
+col1, col2 = st.columns([1, 5])
+
+with col1:
+    if st.button("🔄 Refresh data"):
+        st.cache_data.clear()
+        st.rerun()
+
+
+# ---------------------------------------------------------
+# CURRENT STOCK METRICS
+# ---------------------------------------------------------
+
+st.subheader("📊 Current Overview")
+
+overview_rows = []
+
+with st.spinner("Fetching stock data..."):
+
+    for stock_name in selected_stocks:
+
+        ticker = stock_lookup[stock_name]
+
+        metrics = get_latest_metrics(ticker)
+
+        if metrics is None:
+            st.warning(
+                f"Could not retrieve data for {stock_name} ({ticker})."
+            )
+            continue
+
+        row = {
+            "Stock": stock_name,
+            "Ticker": ticker,
+            "Price": metrics["Price"]
+        }
+
+        for period in EMA_PERIODS:
+            row[f"EMA {period}"] = metrics[f"EMA {period}"]
+            row[f"Distance from EMA {period}"] = (
+                metrics[f"Distance from EMA {period}"]
+            )
+
+        overview_rows.append(row)
+
+
+if overview_rows:
+
+    overview_df = pd.DataFrame(overview_rows)
+
+    # Format table values
+    display_df = overview_df.copy()
+
+    display_df["Price"] = display_df["Price"].map(
+        lambda x: f"₹{x:,.2f}"
     )
 
-# -------------------------
-# Latest values
-# -------------------------
+    for period in EMA_PERIODS:
 
-latest = data.iloc[-1]
+        display_df[f"EMA {period}"] = display_df[
+            f"EMA {period}"
+        ].map(
+            lambda x: f"₹{x:,.2f}"
+        )
 
-close = float(latest["Close"])
+        display_df[
+            f"Distance from EMA {period}"
+        ] = display_df[
+            f"Distance from EMA {period}"
+        ].map(
+            lambda x: f"{x:+.2f}%"
+        )
 
-if len(data) > 1:
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True
+    )
 
-    previous_close = float(data.iloc[-2]["Close"])
 
-    change = close - previous_close
+# ---------------------------------------------------------
+# CHART SETTINGS
+# ---------------------------------------------------------
 
-    change_percent = (
-        change / previous_close
-    ) * 100
+st.subheader("📈 Historical Charts")
 
-else:
-
-    change = 0
-    change_percent = 0
-
-# -------------------------
-# Header
-# -------------------------
-
-st.subheader(ticker)
-
-col1, col2, col3, col4 = st.columns(4)
-
-col1.metric(
-    "Latest Price",
-    f"{close:,.2f}",
-    f"{change:+,.2f} ({change_percent:+.2f}%)"
+chart_period = st.selectbox(
+    "Chart period",
+    options=[
+        ("3 months", "3mo"),
+        ("6 months", "6mo"),
+        ("1 year", "1y"),
+        ("2 years", "2y"),
+        ("5 years", "5y")
+    ],
+    format_func=lambda x: x[0],
+    index=2
 )
 
-for column, ema in zip(
-    [col2, col3, col4],
-    ema_periods[:3]
-):
+period_code = chart_period[1]
 
-    ema_value = float(
-        latest[f"EMA {ema}"]
-    )
 
-    difference = (
-        (close / ema_value) - 1
-    ) * 100
+# ---------------------------------------------------------
+# CHARTS
+# ---------------------------------------------------------
 
-    column.metric(
-        f"EMA {ema}",
-        f"{ema_value:,.2f}",
-        f"{difference:+.2f}% vs price"
-    )
+for stock_name in selected_stocks:
 
-# -------------------------
-# EMA table
-# -------------------------
+    ticker = stock_lookup[stock_name]
 
-st.subheader("EMA Summary")
+    with st.spinner(f"Loading {stock_name}..."):
 
-rows = []
-
-for ema in sorted(ema_periods):
-
-    ema_value = float(
-        latest[f"EMA {ema}"]
-    )
-
-    difference = (
-        (close / ema_value) - 1
-    ) * 100
-
-    rows.append({
-        "EMA": f"EMA {ema}",
-        "Value": round(ema_value, 2),
-        "Price vs EMA": f"{difference:+.2f}%",
-        "Price Above EMA": "Yes" if close > ema_value else "No"
-    })
-
-ema_table = pd.DataFrame(rows)
-
-st.dataframe(
-    ema_table,
-    use_container_width=True,
-    hide_index=True
-)
-
-# -------------------------
-# Price chart
-# -------------------------
-
-st.subheader("Price & EMA Chart")
-
-fig = go.Figure()
-
-if show_candles:
-
-    fig.add_trace(
-        go.Candlestick(
-            x=data.index,
-            open=data["Open"],
-            high=data["High"],
-            low=data["Low"],
-            close=data["Close"],
-            name="Price"
+        data = get_stock_data(
+            ticker,
+            period_code
         )
-    )
 
-else:
+    if data is None or data.empty:
+        st.warning(
+            f"No chart data available for {stock_name}."
+        )
+        continue
 
+    # Calculate EMAs
+    for ema_period in EMA_PERIODS:
+        data[f"EMA {ema_period}"] = calculate_ema(
+            data,
+            ema_period
+        )
+
+    # -----------------------------------------------------
+    # CHART
+    # -----------------------------------------------------
+
+    fig = go.Figure()
+
+    # Price
     fig.add_trace(
         go.Scatter(
             x=data.index,
             y=data["Close"],
             mode="lines",
-            name="Close"
+            name="Price"
         )
     )
 
-# Add EMA lines
+    # EMA lines
+    for ema_period in EMA_PERIODS:
 
-for ema in sorted(ema_periods):
-
-    fig.add_trace(
-        go.Scatter(
-            x=data.index,
-            y=data[f"EMA {ema}"],
-            mode="lines",
-            name=f"EMA {ema}"
+        fig.add_trace(
+            go.Scatter(
+                x=data.index,
+                y=data[f"EMA {ema_period}"],
+                mode="lines",
+                name=f"EMA {ema_period}"
+            )
         )
-    )
 
-fig.update_layout(
-    height=600,
-    xaxis_title="Date",
-    yaxis_title="Price",
-    hovermode="x unified",
-    xaxis_rangeslider_visible=False
-)
-
-st.plotly_chart(
-    fig,
-    use_container_width=True
-)
-
-# -------------------------
-# Volume
-# -------------------------
-
-if show_volume and "Volume" in data.columns:
-
-    st.subheader("Volume")
-
-    volume_fig = go.Figure()
-
-    volume_fig.add_trace(
-        go.Bar(
-            x=data.index,
-            y=data["Volume"],
-            name="Volume"
+    fig.update_layout(
+        title=f"{stock_name} ({ticker})",
+        xaxis_title="Date",
+        yaxis_title="Price (₹)",
+        hovermode="x unified",
+        height=500,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0
         )
-    )
-
-    volume_fig.update_layout(
-        height=300,
-        xaxis_rangeslider_visible=False
     )
 
     st.plotly_chart(
-        volume_fig,
+        fig,
         use_container_width=True
     )
-
-# -------------------------
-# Raw data
-# -------------------------
-
-with st.expander("View latest data"):
-
-    st.dataframe(
-        data.tail(30).sort_index(
-            ascending=False
-        ),
-        use_container_width=True
-    )
-
-st.divider()
-
-st.caption(
-    "Market data provided through Yahoo Finance via yfinance. "
-    "Data availability and accuracy may vary."
-)

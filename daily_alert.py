@@ -1,5 +1,6 @@
 import json
 import os
+from urllib import response
 
 import requests
 import yfinance as yf
@@ -21,28 +22,24 @@ def calculate_ema(data, period):
 
 
 def send_telegram_message(message):
-    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+    TELEGRAM_CHAT_IDS = os.getenv("TELEGRAM_CHAT_IDS").split(",")
 
-    if not bot_token or not chat_id:
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
         raise RuntimeError(
-            "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID is missing."
+            "TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_IDS is missing."
         )
 
     url = (
-        f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     )
 
-    response = requests.post(
-        url,
-        data={
-            "chat_id": chat_id,
+    for chat_id in TELEGRAM_CHAT_IDS:
+        response = requests.post(url, json={
+            "chat_id": chat_id.strip(),
             "text": message
-        },
-        timeout=30
-    )
-
-    response.raise_for_status()
+        })
+        response.raise_for_status()
 
 
 def check_stock(stock, ema_periods, threshold):

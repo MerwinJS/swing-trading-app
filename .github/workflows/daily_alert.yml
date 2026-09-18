@@ -3,7 +3,7 @@ name: Daily Stock EMA Alert
 on:
   schedule:
     # 13:00 UTC = 18:30 IST
-    - cron: "0 20 * * 1-5"
+    - cron: "0 10 * * 1-5"
 
   workflow_dispatch:
 

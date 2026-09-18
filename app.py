@@ -40,6 +40,7 @@ stocks = watchlist.get("stocks", [])
 settings = watchlist.get("settings", {})
 
 EMA_PERIODS = settings.get("ema_periods", [100, 200])
+ALERT_THRESHOLD_PERCENT = settings.get("alert_threshold_percent", 2.0)
 
 
 # =========================================================
@@ -400,34 +401,36 @@ if overview_rows:
         overview_rows
     )
 
-    display_df = overview_df.copy()
+    distance_columns = [
+        f"Distance from EMA {period}"
+        for period in EMA_PERIODS
+    ]
 
-    display_df["Price"] = display_df[
-        "Price"
-    ].map(
-        lambda x: f"₹{x:,.2f}"
-    )
+    def highlight_threshold(value):
+        if abs(value) <= ALERT_THRESHOLD_PERCENT:
+            return "background-color: #d1fae5; color: #065f46"
+        return ""
+
+    formatters = {
+        "Price": lambda value: f"₹{value:,.2f}"
+    }
 
     for period in EMA_PERIODS:
-
-        display_df[
-            f"EMA {period}"
-        ] = display_df[
-            f"EMA {period}"
-        ].map(
-            lambda x: f"₹{x:,.2f}"
+        formatters[f"EMA {period}"] = (
+            lambda value: f"₹{value:,.2f}"
+        )
+        formatters[f"Distance from EMA {period}"] = (
+            lambda value: f"{value:+.2f}%"
         )
 
-        display_df[
-            f"Distance from EMA {period}"
-        ] = display_df[
-            f"Distance from EMA {period}"
-        ].map(
-            lambda x: f"{x:+.2f}%"
-        )
+    styled_df = (
+        overview_df.style
+        .map(highlight_threshold, subset=distance_columns)
+        .format(formatters)
+    )
 
     st.dataframe(
-        display_df,
+        styled_df,
         use_container_width=True,
         hide_index=True
     )

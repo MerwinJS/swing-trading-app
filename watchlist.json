@@ -27,6 +27,14 @@
     {
       "name": "State Bank of India",
       "ticker": "SBIN.NS"
+    },
+    {
+      "name": "DBS Group Holdings Ltd",
+      "ticker": "D05.SI"
+    },
+    {
+      "name": "STI Index",
+      "ticker": "^STI"
     }
   ]
 }
